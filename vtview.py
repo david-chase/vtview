@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 from PIL import Image, ImageTk
 import configparser
+import re
 
 class ImageBrowserApp:
     def __init__(self, root):
@@ -19,14 +20,26 @@ class ImageBrowserApp:
         self.current_folder = self.default_folder
         self.root.title(f"VtView - {self.current_folder}")
 
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add('write', self.update_file_list)
+
         self.paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         self.paned.pack(fill=tk.BOTH, expand=True)
 
-        self.left_frame = ttk.Frame(self.paned, width=200)
-        self.paned.add(self.left_frame, minsize=100)
+        screen_width = self.root.winfo_screenwidth()
+        # Load file list width from INI (default to 0.33 if not specified)
+        list_width_fraction = float(self.config.get("Settings", "file_list_width", fallback="0.33"))
+        left_frame_width = int(screen_width * list_width_fraction)
+
+        self.left_frame = ttk.Frame(self.paned, width=left_frame_width)
+        self.left_frame.pack_propagate(False)  # Prevent frame from shrinking to fit contents
+        self.paned.add(self.left_frame, minsize=200)
+
+        self.search_entry = ttk.Entry(self.left_frame, textvariable=self.search_var)
+        self.search_entry.pack(padx=10, pady=(10, 0), fill=tk.X)
 
         self.select_button = ttk.Button(self.left_frame, text="Select Folder", command=self.select_folder)
-        self.select_button.pack(padx=10, pady=(10, 0), fill=tk.X)
+        self.select_button.pack(padx=10, pady=(5, 0), fill=tk.X)
 
         self.listbox = tk.Listbox(self.left_frame)
         self.listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -41,6 +54,7 @@ class ImageBrowserApp:
         self.current_image = None
         self.current_image_path = None
         self.fullscreen_window = None
+        self.all_files = []
 
         self.load_images()
         self.canvas.bind("<Configure>", self.on_canvas_resize)
@@ -51,6 +65,7 @@ class ImageBrowserApp:
         fullscreen_key = self.shortcut_keys.get("fullscreen_view", "Return")
         move_key = self.shortcut_keys.get("move_file", "Alt-m")
         copy_key = self.shortcut_keys.get("copy_file", "Alt-c")
+        rewrite_key = self.shortcut_keys.get("rewrite_file", "Alt-r")
 
         self.root.bind(f"<{delete_key}>", self.prompt_delete_selected_file)
         self.root.bind(f"<{refresh_key}>", self.refresh_folder)
@@ -58,6 +73,7 @@ class ImageBrowserApp:
         self.root.bind(f"<{fullscreen_key}>", self.show_fullscreen_image)
         self.root.bind(f"<{move_key}>", self.move_file_to_folder)
         self.root.bind(f"<{copy_key}>", self.copy_file_to_folder)
+        self.root.bind(f"<{rewrite_key}>", self.rewrite_file_name)
 
     def load_config(self):
         config = configparser.ConfigParser()
@@ -79,33 +95,46 @@ class ImageBrowserApp:
             self.load_images()
 
     def load_images(self):
+        self.all_files = []
+        try:
+            self.all_files = [
+                f for f in sorted(os.listdir(self.current_folder))
+                if f.lower().endswith(self.supported_formats)
+            ]
+        except Exception as e:
+            self.canvas.delete("all")
+            self.canvas.create_text(
+                10, 10, anchor=tk.NW,
+                text=f"Error reading folder:\n{e}",
+                fill="white",
+                font=("Arial", 14)
+            )
+        self.update_file_list()
+
+    def update_file_list(self, *args):
         self.listbox.delete(0, tk.END)
         self.current_image_path = None
         self.canvas.delete("all")
 
-        try:
-            image_files = [
-                f for f in sorted(os.listdir(self.current_folder))
-                if f.lower().endswith(self.supported_formats)
-            ]
-            for file in image_files:
-                self.listbox.insert(tk.END, file)
+        query = self.search_var.get().strip().lower().split()
 
-            if image_files:
-                self.listbox.selection_set(0)
-                self.listbox.activate(0)
-                self.listbox.event_generate("<<ListboxSelect>>")
-            else:
-                self.canvas.create_text(
-                    10, 10, anchor=tk.NW,
-                    text="No supported image files in this folder.",
-                    fill="white",
-                    font=("Arial", 14)
-                )
-        except Exception as e:
+        def match_all_terms(filename):
+            name = filename.lower()
+            return all(term in name for term in query)
+
+        matching_files = [f for f in self.all_files if match_all_terms(f)]
+
+        for file in matching_files:
+            self.listbox.insert(tk.END, file)
+
+        if matching_files:
+            self.listbox.selection_set(0)
+            self.listbox.activate(0)
+            self.listbox.event_generate("<<ListboxSelect>>")
+        else:
             self.canvas.create_text(
                 10, 10, anchor=tk.NW,
-                text=f"Error reading folder:\n{e}",
+                text="No matching files.",
                 fill="white",
                 font=("Arial", 14)
             )
@@ -128,10 +157,8 @@ class ImageBrowserApp:
     def render_image(self):
         try:
             img = Image.open(self.current_image_path)
-
             canvas_width = self.canvas.winfo_width()
             canvas_height = self.canvas.winfo_height()
-
             img_ratio = img.width / img.height
             canvas_ratio = canvas_width / canvas_height
 
@@ -143,7 +170,6 @@ class ImageBrowserApp:
                 new_width = int(new_height * img_ratio)
 
             img = img.resize((new_width, new_height), Image.LANCZOS)
-
             self.current_image = ImageTk.PhotoImage(img)
             self.canvas.delete("all")
             self.canvas.create_image(
@@ -165,10 +191,8 @@ class ImageBrowserApp:
         selection = self.listbox.curselection()
         if not selection:
             return
-
         filename = self.listbox.get(selection[0])
         full_path = os.path.join(self.current_folder, filename)
-
         confirm = messagebox.askyesno("Delete File", f"Are you sure you want to delete:\n\n{filename}?")
         if confirm:
             try:
@@ -182,20 +206,15 @@ class ImageBrowserApp:
         selection = self.listbox.curselection()
         if not selection:
             return
-
         old_name = self.listbox.get(selection[0])
         old_path = os.path.join(self.current_folder, old_name)
-
         new_name = simpledialog.askstring("Rename File", f"Enter new name for:\n{old_name}", initialvalue=old_name)
         if not new_name or new_name.strip() == "":
             return
-
         new_path = os.path.join(self.current_folder, new_name)
-
         if os.path.exists(new_path):
             messagebox.showerror("Rename Failed", "A file with that name already exists.")
             return
-
         try:
             os.rename(old_path, new_path)
             self.load_images()
@@ -211,20 +230,15 @@ class ImageBrowserApp:
         selection = self.listbox.curselection()
         if not selection:
             return
-
         filename = self.listbox.get(selection[0])
         full_path = os.path.join(self.current_folder, filename)
-
         target_dir = filedialog.askdirectory(title="Select Destination Folder")
         if not target_dir:
             return
-
         target_path = os.path.join(target_dir, filename)
-
         if os.path.exists(target_path):
             messagebox.showerror("Move Failed", "A file with the same name already exists in the target folder.")
             return
-
         try:
             shutil.move(full_path, target_path)
             self.load_images()
@@ -235,20 +249,15 @@ class ImageBrowserApp:
         selection = self.listbox.curselection()
         if not selection:
             return
-
         filename = self.listbox.get(selection[0])
         full_path = os.path.join(self.current_folder, filename)
-
         target_dir = filedialog.askdirectory(title="Select Destination Folder")
         if not target_dir:
             return
-
         target_path = os.path.join(target_dir, filename)
-
         if os.path.exists(target_path):
             messagebox.showerror("Copy Failed", "A file with the same name already exists in the target folder.")
             return
-
         try:
             shutil.copy2(full_path, target_path)
         except Exception as e:
@@ -257,13 +266,11 @@ class ImageBrowserApp:
     def show_fullscreen_image(self, event=None):
         if not self.current_image_path:
             return
-
         selection = self.listbox.curselection()
         if not selection:
             return
         self.fullscreen_index = selection[0]
         self.fullscreen_images = self.listbox.get(0, tk.END)
-
         self.open_fullscreen_window()
 
     def open_fullscreen_window(self):
@@ -273,36 +280,28 @@ class ImageBrowserApp:
             img = Image.open(full_path)
             screen_width = self.root.winfo_screenwidth()
             screen_height = self.root.winfo_screenheight()
-
             img_ratio = img.width / img.height
             screen_ratio = screen_width / screen_height
-
             if img_ratio > screen_ratio:
                 new_width = screen_width
                 new_height = int(new_width / img_ratio)
             else:
                 new_height = screen_height
                 new_width = int(new_height * img_ratio)
-
             img = img.resize((new_width, new_height), Image.LANCZOS)
             fullscreen_img = ImageTk.PhotoImage(img)
-
             if self.fullscreen_window is not None and self.fullscreen_window.winfo_exists():
                 self.fullscreen_window.destroy()
-
             self.fullscreen_window = tk.Toplevel(self.root)
             self.fullscreen_window.attributes("-fullscreen", True)
             self.fullscreen_window.configure(bg="black")
             self.fullscreen_window.focus_set()
-
             self.fullscreen_window.bind("<Escape>", lambda e: self.fullscreen_window.destroy())
             self.fullscreen_window.bind("<Left>", self.fullscreen_previous_image)
             self.fullscreen_window.bind("<Right>", self.fullscreen_next_image)
-
             label = tk.Label(self.fullscreen_window, image=fullscreen_img, bg="black")
             label.image = fullscreen_img
             label.pack(expand=True)
-
         except Exception as e:
             messagebox.showerror("Error", f"Could not display fullscreen image:\n\n{e}")
 
@@ -316,8 +315,46 @@ class ImageBrowserApp:
             self.fullscreen_index += 1
             self.open_fullscreen_window()
 
+    def rewrite_file_name(self, event=None):
+        selection = self.listbox.curselection()
+        if not selection:
+            return
+
+        original_filename = self.listbox.get(selection[0])
+        base, ext = os.path.splitext(original_filename)
+
+        if " #" not in base:
+            return  # No tag section
+
+        root_part, tag_part = base.split(" #", 1)
+
+        # Find all hashtags using regex
+        hashtags = re.findall(r"#\w+", tag_part)
+        unique_sorted_tags = sorted(set(hashtags))
+        new_tag_string = "".join(unique_sorted_tags)
+
+        new_filename = f"{root_part} {new_tag_string}{ext}"
+
+        if new_filename != original_filename:
+            old_path = os.path.join(self.current_folder, original_filename)
+            new_path = os.path.join(self.current_folder, new_filename)
+
+            if os.path.exists(new_path):
+                messagebox.showerror("Rename Failed", "A file with the new name already exists.")
+                return
+
+            try:
+                os.rename(old_path, new_path)
+                self.load_images()
+                index = self.listbox.get(0, tk.END).index(new_filename)
+                self.listbox.selection_set(index)
+                self.listbox.activate(index)
+                self.show_selected_image(None)
+            except Exception as e:
+                messagebox.showerror("Rename Failed", f"Failed to rewrite file name:\n{e}")
+
 if __name__ == "__main__":
     root = tk.Tk()
+    root.state('zoomed')
     app = ImageBrowserApp(root)
-    root.geometry("900x650")
     root.mainloop()
