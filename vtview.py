@@ -30,6 +30,160 @@ def scrub_filename(filename: str) -> str:
     return f"{root_part} {new_tag_string}{ext}"
 
 class ImageBrowserApp:
+    def sort_key_factory(self, method):
+        def sort_key(filename):
+            path = os.path.join(self.current_folder, filename)
+            try:
+                if method == "Size":
+                    return os.path.getsize(path)
+                elif method == "Created":
+                    return os.path.getctime(path)
+                elif method == "Modified":
+                    return os.path.getmtime(path)
+                else:
+                    return filename.lower()
+            except:
+                return 0
+        return sort_key
+
+    def on_listbox_motion(self, event):
+        index = self.listbox.nearest(event.y)
+
+        # If same index as before, do nothing
+        if self.tooltip_index == index:
+            return
+
+        self.hide_tooltip()  # Cancel previous tooltip if any
+        self.tooltip_index = index
+
+        # Schedule new tooltip
+        self.tooltip_after_id = self.root.after(1000, lambda: self.show_tooltip(event, index))
+
+    def show_tooltip(self, event, index):
+        if self.tooltip_window:
+            return  # Already showing
+
+        try:
+            text = self.listbox.get(index)
+        except tk.TclError:
+            return
+
+        x = self.listbox.winfo_rootx() + event.x + 10
+        y = self.listbox.winfo_rooty() + event.y + 10
+
+        self.tooltip_window = tw = tk.Toplevel(self.listbox)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tw.configure(bg="black")
+
+        label = tk.Label(tw, text=text, bg="black", fg="white", font=("Arial", 10), padx=5, pady=2)
+        label.pack()
+
+    def hide_tooltip(self, event=None):
+        if self.tooltip_after_id:
+            self.root.after_cancel(self.tooltip_after_id)
+            self.tooltip_after_id = None
+
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
+
+        self.tooltip_index = None
+
+    def ask_tag_to_remove(self):
+        top = tk.Toplevel(self.root)
+        top.title("Remove Tag")
+        top.geometry("300x120")
+        top.grab_set()
+        top.resizable(False, False)
+        top.configure(bg=self.colors["background"])
+
+        tk.Label(top, text="Enter tag to remove (e.g. #example):", bg=self.colors["background"], fg=self.colors["foreground"]).pack(pady=(10, 0))
+
+        var = tk.StringVar()
+        entry = tk.Entry(top, textvariable=var, bg=self.colors["entry_background"], fg=self.colors["entry_foreground"], insertbackground=self.colors["foreground"])
+        entry.pack(padx=10, pady=10, fill=tk.X)
+        entry.focus()
+
+        def on_enter(event):
+            top.destroy()
+
+        def on_escape(event):
+            var.set("")
+            top.destroy()
+
+        entry.bind("<Return>", on_enter)
+        entry.bind("<Escape>", on_escape)
+
+        top.wait_window()
+        return var.get().strip()
+
+    def ask_tag_with_autocomplete(self):
+        top = tk.Toplevel(self.root)
+        top.title("Add Tag")
+        top.geometry("300x200")
+        top.grab_set()
+        top.resizable(False, False)
+        top.configure(bg=self.colors["background"])
+
+        tk.Label(top, text="Enter tag:", bg=self.colors["background"], fg=self.colors["foreground"]).pack(pady=(10, 0))
+
+        var = tk.StringVar()
+        entry = tk.Entry(top, textvariable=var, bg=self.colors["entry_background"], fg=self.colors["entry_foreground"], insertbackground=self.colors["foreground"])
+        entry.pack(padx=10, pady=(5, 10), fill=tk.X)
+        entry.focus()
+
+        listbox = tk.Listbox(top, height=5, bg=self.colors["list_background"], fg=self.colors["foreground"], selectbackground=self.colors["highlight"])
+        listbox.pack(padx=10, pady=(0, 10), fill=tk.BOTH, expand=True)
+
+        favorites = sorted([t.strip().lower() for t in self.config.get("Tags", "favorites", fallback="").split(",") if t.strip()])
+
+        def on_escape(event):
+            var.set("")
+            top.destroy()
+
+        def update_suggestions(*args):
+            typed = var.get().lower()
+            filtered = [tag for tag in favorites if tag.startswith(typed)] if typed else favorites
+            listbox.delete(0, tk.END)
+            for tag in filtered:
+                listbox.insert(tk.END, tag)
+
+        def on_select():
+            selection = listbox.curselection()
+            if selection:
+                var.set(listbox.get(selection[0]))
+                top.after(100, top.destroy)
+
+        def on_enter_entry(event):
+            top.destroy()
+
+        def on_down_arrow(event):
+            if listbox.size() > 0:
+                listbox.focus_set()
+                listbox.selection_clear(0, tk.END)
+                listbox.selection_set(0)
+                listbox.activate(0)
+            return "break"
+
+        def on_listbox_enter(event):
+            on_select()
+            return "break"
+
+        var.trace_add("write", update_suggestions)
+        entry.bind("<Return>", on_enter_entry)
+        entry.bind("<Down>", on_down_arrow)
+        entry.bind("<Escape>", on_escape)
+
+        listbox.bind("<Return>", on_listbox_enter)
+        listbox.bind("<Double-Button-1>", lambda e: on_select())
+        listbox.bind("<Escape>", on_escape)
+
+        update_suggestions()
+
+        top.wait_window()
+        return var.get().strip()
+
     def open_help_url(self, event=None):
         webbrowser.open("https://github.com/david-chase/vtview/blob/main/README.md")    
     
@@ -93,41 +247,41 @@ class ImageBrowserApp:
         if not selection:
             return
 
-        tag = simpledialog.askstring("Remove Tag", "Enter tag to remove (e.g. #example):")
+        tag = self.ask_tag_to_remove()
         if not tag:
             return
 
         tag = tag.strip()
-        if not tag:
-            return
-
         if not tag.startswith("#"):
             tag = f"#{tag}"
 
         filenames = [self.listbox.get(i) for i in selection]
-        updated_filenames = []  # Moved here
+        updated_filenames = []
         dialog, label, progress = self.show_status_dialog("Removing Tag", filenames)
 
-    def add_custom_tag(self, event=None):
-        selection = self.listbox.curselection()
-        if not selection:
-            return
+        for i, filename in enumerate(filenames):
+            label.config(text=filename)
+            dialog.update_idletasks()
 
-        tag = simpledialog.askstring("Add Tag", "Enter tag to add (e.g. #example):")
-        if not tag:
-            return
+            base, ext = os.path.splitext(filename)
+            modified = re.sub(re.escape(tag), "", base, flags=re.IGNORECASE)
+            new_filename = scrub_filename(f"{modified}{ext}")
 
-        tag = tag.strip()
-        if not tag:
-            return
+            if new_filename == filename:
+                continue
 
-        if not tag.startswith("#"):
-            tag = f"#{tag}"
+            src = os.path.join(self.current_folder, filename)
+            dst = os.path.join(self.current_folder, new_filename)
 
-        filenames = [self.listbox.get(i) for i in selection]
-        updated_filenames = []  # ✅ This must appear BEFORE the if check
-        dialog, label, progress = self.show_status_dialog("Adding Tag", filenames)
+            try:
+                os.rename(src, dst)
+                updated_filenames.append(new_filename)
+            except Exception as e:
+                messagebox.showerror("Rename Failed", f"Could not remove tag from {filename}:\n{e}")
 
+            progress["value"] = i + 1
+
+        dialog.destroy()
 
         if updated_filenames:
             self.load_images()
@@ -144,6 +298,60 @@ class ImageBrowserApp:
             self.listbox.focus_set()
             self.listbox.event_generate("<<ListboxSelect>>")
 
+
+    def add_custom_tag(self, event=None):
+        selection = self.listbox.curselection()
+        if not selection:
+            return
+
+        tag = self.ask_tag_with_autocomplete()
+        if not tag:
+            return
+
+        tag = tag.strip()
+        if not tag.startswith("#"):
+            tag = f"#{tag}"
+
+        filenames = [self.listbox.get(i) for i in selection]
+        updated_filenames = []
+        dialog, label, progress = self.show_status_dialog("Adding Tag", filenames)
+
+        for i, filename in enumerate(filenames):
+            label.config(text=filename)
+            dialog.update_idletasks()
+
+            base, ext = os.path.splitext(filename)
+            new_filename = scrub_filename(f"{base} {tag}{ext}")
+            if new_filename == filename:
+                continue
+
+            src = os.path.join(self.current_folder, filename)
+            dst = os.path.join(self.current_folder, new_filename)
+
+            try:
+                os.rename(src, dst)
+                updated_filenames.append(new_filename)
+            except Exception as e:
+                messagebox.showerror("Rename Failed", f"Could not add tag to {filename}:\n{e}")
+
+            progress["value"] = i + 1
+
+        dialog.destroy()
+
+        if updated_filenames:
+            self.load_images()
+            filenames = self.listbox.get(0, tk.END)
+            self.listbox.selection_clear(0, tk.END)
+            for fname in updated_filenames:
+                try:
+                    idx = filenames.index(fname)
+                    self.listbox.selection_set(idx)
+                    self.listbox.activate(idx)
+                    self.listbox.see(idx)
+                except ValueError:
+                    continue
+            self.listbox.focus_set()
+            self.listbox.event_generate("<<ListboxSelect>>")
 
     def _tag_shortcut_handler(self, tag_value, event=None):
         self.tag_file_with_priority(str(tag_value))
@@ -187,15 +395,38 @@ class ImageBrowserApp:
         )
         self.search_entry.pack(padx=10, pady=(10, 0), fill=tk.X)
 
+        folder_sort_frame = tk.Frame(self.left_frame, bg=self.colors["background"])
+        folder_sort_frame.pack(padx=10, pady=(5, 0), fill=tk.X)
+
         self.select_button = tk.Button(
-            self.left_frame,
-            text="Select Folder",
+            folder_sort_frame,
+            text="Select",
+            width=6,
             bg=self.colors["button_background"],
             fg=self.colors["button_foreground"],
             activebackground=self.colors["highlight"],
             command=self.select_folder
         )
-        self.select_button.pack(padx=10, pady=(5, 0), fill=tk.X)
+        self.select_button.pack(side=tk.LEFT)
+
+        tk.Label(
+            folder_sort_frame,
+            text="Sort by:",
+            bg=self.colors["background"],
+            fg=self.colors["foreground"]
+        ).pack(side=tk.LEFT, padx=(10, 2))
+
+        self.sort_var = tk.StringVar(value="Name")
+        self.sort_dropdown = ttk.Combobox(
+            folder_sort_frame,
+            textvariable=self.sort_var,
+            values=["Name", "Size", "Created", "Modified"],
+            state="readonly",
+            width=10
+        )
+        self.sort_dropdown.pack(side=tk.LEFT)
+        self.sort_dropdown.bind("<<ComboboxSelected>>", lambda e: self.load_images())
+
 
         listbox_frame = tk.Frame(self.left_frame, bg=self.colors["foreground"], bd=1, relief="solid")
         listbox_frame.pack(fill=tk.BOTH, expand=True, padx=(0,0), pady=(10,5))
@@ -217,6 +448,14 @@ class ImageBrowserApp:
         scrollbar.config(command=self.listbox.yview)
 
         self.listbox.bind("<<ListboxSelect>>", self.show_selected_image)
+
+        self.tooltip_window = None
+        self.tooltip_after_id = None
+        self.tooltip_index = None
+
+        self.listbox.bind("<Motion>", self.on_listbox_motion)
+        self.listbox.bind("<Leave>", self.hide_tooltip)
+
 
         self.right_frame = tk.Frame(self.paned, bg=self.colors["background"])
         self.paned.add(self.right_frame)
@@ -253,23 +492,56 @@ class ImageBrowserApp:
             "toss_to_model": self.toss_to_model_folder,
             "add_tag": self.add_custom_tag,
             "make_index": self.make_index_file,
-            "remove_tag": self.remove_custom_tag
+            "remove_tag": self.remove_custom_tag,
+            "open_help": self.open_help_url
         }
 
         for keyname, handler in keymap.items():
             raw_key = self.shortcut_keys.get(keyname)
             if raw_key:
-                self.root.bind_all(self.normalize_binding(raw_key), handler)
+                binding = self.normalize_binding(raw_key)
+
+                # Return 'break' to suppress default widget behavior
+                def wrapped_handler(event, h=handler):
+                    h()
+                    return "break"
+
+                self.listbox.bind(binding, wrapped_handler)
+                self.search_entry.bind(binding, wrapped_handler)
 
         for i in range(1, 6):
             raw_key = self.shortcut_keys.get(f"alt_tag_{i}", f"Alt-{i}")
             binding = self.normalize_binding(raw_key)
             self.root.bind_all(binding, partial(self._tag_shortcut_handler, i))
 
+        # Set the focus on file list and select first item on app load
+        if self.listbox.size() > 0:
+            self.listbox.selection_set(0)
+            self.listbox.activate(0)
+            self.listbox.event_generate("<<ListboxSelect>>")
+        self.listbox.focus_set()
+
+
     def normalize_binding(self, key_str):
+        key_str = key_str.strip()
+
+        # Alt keys
         if key_str.lower().startswith("alt-") and key_str[4:].isdigit():
             return f"<Alt-Key-{key_str[4:]}>"
-        return f"<{key_str}>"
+
+        # Special keys, proper casing
+        special_keys = {
+            "home": "Home",
+            "end": "End",
+            "delete": "Delete",
+            "return": "Return",
+            "f1": "F1",
+            "f2": "F2",
+            "f5": "F5",
+        }
+
+        normalized = special_keys.get(key_str.lower(), key_str)
+        return f"<{normalized}>"
 
     def tag_file_with_priority(self, tag_value):
         selection = self.listbox.curselection()
@@ -323,9 +595,18 @@ class ImageBrowserApp:
             return
 
         model_base_dir = self.config.get("Settings", "ModelBaseDir", fallback=None)
+        video_base_dir = self.config.get("Settings", "VideoBaseDir", fallback=None)
+        video_all_dir = self.config.get("Settings", "VideoAllDir", fallback=None)
+
         if not model_base_dir or not os.path.isdir(model_base_dir):
             messagebox.showwarning("Invalid Base Folder", "ModelBaseDir is not defined or does not exist.")
             return
+
+        raw_video_exts = self.config.get("Settings", "videoextensions", fallback="")
+        video_exts = tuple(
+            ext.strip().lower() if ext.strip().startswith(".") else f".{ext.strip().lower()}"
+            for ext in raw_video_exts.split(",") if ext.strip()
+        )
 
         filenames = [self.listbox.get(i) for i in selection]
         dialog, label, progress = self.show_status_dialog("Tossing to Model Folder", filenames)
@@ -340,9 +621,23 @@ class ImageBrowserApp:
                 continue
 
             model_name = match.group(1)
-            target_dir = os.path.join(model_base_dir, model_name)
-            if not os.path.isdir(target_dir):
-                continue
+            file_ext = os.path.splitext(filename)[1].lower()
+            is_video = file_ext in video_exts
+
+            model_folder = os.path.join(model_base_dir, model_name)
+            model_folder_exists = os.path.isdir(model_folder)
+
+            if is_video:
+                if model_folder_exists and video_base_dir and os.path.isdir(video_base_dir):
+                    target_dir = video_base_dir
+                elif video_all_dir and os.path.isdir(video_all_dir):
+                    target_dir = video_all_dir
+                else:
+                    continue  # skip if neither video base dir exists
+            else:
+                if not model_folder_exists:
+                    continue
+                target_dir = model_folder
 
             src = os.path.join(self.current_folder, filename)
             dest = os.path.join(target_dir, filename)
@@ -359,8 +654,8 @@ class ImageBrowserApp:
 
         if moved_files:
             self.load_images()
-    
-    
+
+
     def load_config(self):
         config = configparser.ConfigParser()
         config.read(self.config_path)
@@ -368,7 +663,11 @@ class ImageBrowserApp:
 
     def get_supported_extensions(self):
         extensions = self.config.get("Settings", "extensions", fallback=".jpg,.jpeg,.gif,.webp,.png")
+        video_extensions = self.config.get("Sections", "videoextensions", fallback=".mp4,.avi,.webm").lower()
+
+        self.video_extensions = tuple(e.strip().lower() for e in video_extensions.split(",") if e.strip())
         return tuple(e.strip().lower() for e in extensions.split(",") if e.strip())
+
 
     def get_shortcuts(self):
         return dict(self.config.items("Shortcuts")) if self.config.has_section("Shortcuts") else {}
@@ -384,7 +683,8 @@ class ImageBrowserApp:
             "entry_foreground": "#ffffff",
             "list_background": "#1e1e1e",
             "list_background_alt": "#252525",
-            "canvas_background": "#1e1e1e"
+            "canvas_background": "#1e1e1e",
+            "invalid_foreground": "#888888"
         }
         if self.config.has_section("Colors"):
             for key in default_colors:
@@ -393,6 +693,7 @@ class ImageBrowserApp:
             # Optional extensions
             default_colors["list_background"] = self.config.get("Colors", "list_background", fallback=default_colors["background"])
             default_colors["canvas_background"] = self.config.get("Colors", "canvas_background", fallback=default_colors["background"])        
+            default_colors["invalid_foreground"] = self.config.get("Colors", "invalid_foreground", fallback=default_colors["invalid_foreground"])
             
         return default_colors
 
@@ -405,10 +706,27 @@ class ImageBrowserApp:
 
     def load_images(self):
         try:
-            self.all_files = sorted([
-                f for f in os.listdir(self.current_folder)
-                if f.lower().endswith(self.supported_formats)
-            ])
+            def sort_key_factory(self, method):
+                def sort_key(filename):
+                    path = os.path.join(self.current_folder, filename)
+                    try:
+                        if method == "Size":
+                            return os.path.getsize(path)
+                        elif method == "Created":
+                            return os.path.getctime(path)
+                        elif method == "Modified":
+                            return os.path.getmtime(path)
+                        else:
+                            return filename.lower()
+                    except:
+                        return 0
+                return sort_key
+
+            sort_method = self.sort_var.get() if hasattr(self, 'sort_var') else "Name"
+            file_list = [f for f in os.listdir(self.current_folder) if f.lower().endswith(self.supported_formats)]
+            sort_key = self.sort_key_factory(sort_method)
+            self.all_files = sorted(file_list, key=sort_key)
+
         except Exception as e:
             self.canvas.delete("all")
             self.canvas.create_text(
@@ -435,7 +753,15 @@ class ImageBrowserApp:
         for index, file in enumerate(matching_files):
             self.listbox.insert(tk.END, file)
             bg = self.colors["list_background"] if index % 2 == 0 else self.colors["list_background_alt"]
-            self.listbox.itemconfig(index, {'bg': bg, 'fg': self.colors["foreground"]})
+
+            file_path = os.path.join(self.current_folder, file)
+            is_image = True
+            file_ext = os.path.splitext(file)[1].lower()
+            is_image = file_ext in self.supported_formats
+
+            fg = self.colors["foreground"] if is_image else self.colors["invalid_foreground"]
+            self.listbox.itemconfig(index, {'bg': bg, 'fg': fg})
+
 
         if matching_files:
             self.listbox.selection_set(0)
@@ -455,6 +781,7 @@ class ImageBrowserApp:
         selection = self.listbox.curselection()
         if not selection:
             return
+
         filename = self.listbox.get(selection[0])
         filepath = os.path.join(self.current_folder, filename)
 
@@ -464,7 +791,7 @@ class ImageBrowserApp:
             self.render_image()
         except Exception:
             self.current_image_path = None
-
+            self.canvas.delete("all")  # 👈 Clear stale image
 
     def on_canvas_resize(self, event):
         if self.current_image_path:
@@ -510,6 +837,8 @@ class ImageBrowserApp:
             return
 
         filenames = [self.listbox.get(i) for i in selection]
+        start_index = selection[0]
+
         dialog, label, progress = self.show_status_dialog("Deleting Files", filenames)
 
         for i, filename in enumerate(filenames):
@@ -526,6 +855,17 @@ class ImageBrowserApp:
 
         dialog.destroy()
         self.load_images()
+
+        # Try to restore selection near previous location
+        num_items = self.listbox.size()
+        if num_items > 0:
+            restored_index = min(start_index, num_items - 1)
+            self.listbox.selection_clear(0, tk.END)
+            self.listbox.selection_set(restored_index)
+            self.listbox.activate(restored_index)
+            self.listbox.see(restored_index)
+            self.listbox.focus_set()
+            self.listbox.event_generate("<<ListboxSelect>>")
 
     def move_files_to_folder(self, event=None):
         selection = self.listbox.curselection()
