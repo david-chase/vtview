@@ -18,6 +18,8 @@ Alt-T   Toss file(s) into a folder
 Alt-F4  Exit
 Del     Delete file(s)
 Enter   View fullscreen / launch external program
+End     Go to last file in list
+Home    Go to first file in list
 F1      Help
 F2      Rename file
 F5      Refresh view
