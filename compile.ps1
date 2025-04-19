@@ -1,0 +1,1 @@
+C:\Users\dchas\AppData\Roaming\Python\Python313\Scripts\pyinstaller --noconsole --onefile --distpath . --icon=vtview.ico --add-data "vtview.ini;." vtview.py
