@@ -193,8 +193,8 @@ class ImageBrowserApp:
         )
         self.select_button.pack(padx=10, pady=(5, 0), fill=tk.X)
 
-        listbox_frame = tk.Frame(self.left_frame, bg=self.colors["background"])
-        listbox_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        listbox_frame = tk.Frame(self.left_frame, bg=self.colors["foreground"], bd=1, relief="solid")
+        listbox_frame.pack(fill=tk.BOTH, expand=True, padx=(0,0), pady=(10,5))
 
         scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -218,7 +218,7 @@ class ImageBrowserApp:
         self.paned.add(self.right_frame)
 
         self.canvas = tk.Canvas(self.right_frame, bg=self.colors["canvas_background"], highlightthickness=0)
-        self.canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.canvas.pack(fill=tk.BOTH, expand=True, padx=(0,0), pady=(10,5))
 
         self.current_image = None
         self.current_image_path = None
@@ -437,7 +437,6 @@ class ImageBrowserApp:
             self.listbox.selection_set(0)
             self.listbox.activate(0)
             self.listbox.event_generate("<<ListboxSelect>>")
-            self.listbox.focus_set()
         else:
             self.canvas.create_text(
                 10, 10, anchor=tk.NW,
