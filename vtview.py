@@ -6,6 +6,7 @@ from PIL import Image, ImageTk
 from functools import partial
 import configparser
 import re
+import webbrowser
 
 def scrub_filename(filename: str) -> str:
     base, ext = os.path.splitext(filename)
@@ -29,6 +30,9 @@ def scrub_filename(filename: str) -> str:
     return f"{root_part} {new_tag_string}{ext}"
 
 class ImageBrowserApp:
+    def open_help_url(self, event=None):
+        webbrowser.open("https://github.com/david-chase/vtview/blob/main/README.md")    
+    
     def show_status_dialog(self, title, filenames):
         dialog = tk.Toplevel(self.root)
         dialog.title(title)

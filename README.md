@@ -2,6 +2,7 @@
 VT View is an image viewer written in Python that uses hashtags in filenames to store image metadata.
 
 ## Shortcuts
+```
 Alt-1   Add a tag "#1"
 Alt-2   Add a tag "#2"
 Alt-3   Add a tag "#3"
@@ -14,7 +15,10 @@ Alt-I   Copy current file as an index
 Alt-M   Move file(s)
 Alt-R   Scrub tags in file(s)
 Alt-T   Toss file(s) into a folder
+Alt-F4  Exit
 Del     Delete file(s)
 Enter   View fullscreen / launch external program
+F1      Help
 F2      Rename file
 F5      Refresh view
+```
