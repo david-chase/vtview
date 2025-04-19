@@ -63,8 +63,72 @@ def scrub_filename(filename: str) -> str:
     tag_str = ''.join(filtered_tags)
     return f"{root} {tag_str}{ext}" if tag_str else f"{root}{ext}"
 
-
 class ImageBrowserApp:
+    # Build the menu bar dynamically from the shortcuts in our ini file
+    def build_menu_bar(self):
+        import tkinter as tk
+
+        # Initialize menu bar
+        menubar = tk.Menu(self.root, bg=self.colors["background"], fg=self.colors["foreground"])
+
+        # Step 1: Collect all shortcuts grouped by submenu
+        menus = {}
+        for func_name, shortcut in self.shortcut_keys.items():
+            submenu = shortcut.get("menu", "Other")
+            if submenu not in menus:
+                menus[submenu] = []
+            menus[submenu].append((func_name, shortcut))
+
+        # Step 2: Determine desired menu order from ini (if defined)
+        menu_order_str = self.config.get("Settings", "MenuOrder", fallback="")
+        ordered_names = [m.strip() for m in menu_order_str.split(",") if m.strip()]
+
+        # Step 3: Append unordered submenus alphabetically
+        all_submenus = list(menus.keys())
+        remaining = sorted([m for m in all_submenus if m not in ordered_names])
+        full_order = ordered_names + remaining
+
+        # Step 4: Function mapping
+        keymap = {
+            "delete_file": self.prompt_delete_selected_files,
+            "refresh_folder": self.refresh_folder,
+            "rename_file": self.prompt_rename_selected_file,
+            "fullscreen_view": self.show_fullscreen_image,
+            "move_file": self.move_files_to_folder,
+            "copy_file": self.copy_files_to_folder,
+            "rewrite_file": self.rewrite_file_names,
+            "toss_to_model": self.toss_to_model_folder,
+            "add_tag": self.add_custom_tag,
+            "make_index": self.make_index_file,
+            "remove_tag": self.remove_custom_tag,
+            "tag_from_index": self.tag_from_index_file,
+            "open_help": self.open_help_url
+        }
+        for i in range(1, 6):
+            keymap[f"alt_tag_{i}"] = lambda idx=i: self._tag_shortcut_handler(idx)
+
+        # Step 5: Build menus with two-column layout using 'label' and 'accelerator'
+        for menu_name in full_order:
+            submenu_items = menus.get(menu_name, [])
+            menu = tk.Menu(menubar, tearoff=0, bg=self.colors["background"], fg=self.colors["foreground"])
+
+            for func_name, shortcut in submenu_items:
+                label = shortcut.get("name", func_name)
+                key_display = shortcut.get("key", "")
+                handler = keymap.get(func_name)
+
+                if handler:
+                    menu.add_command(
+                        label=label,
+                        accelerator=key_display,
+                        command=lambda h=handler: h() if callable(h) else None
+                    )
+
+            menubar.add_cascade(label=menu_name, menu=menu)
+
+        self.root.config(menu=menubar)
+
+    # Look in the models folder to see if there's a model index file.  If yes, inherit the tags from it.    
     def tag_from_index_file(self, event=None):
         selection = self.listbox.curselection()
         if not selection:
@@ -499,6 +563,9 @@ class ImageBrowserApp:
         self.root.title(f"VtView - {self.current_folder}")
         self.root.configure(bg=self.colors["background"])
 
+        # Launch the menu bar
+        self.build_menu_bar()
+
         self.search_var = tk.StringVar()
         self.search_var.trace_add('write', self.update_file_list)
 
@@ -838,13 +905,14 @@ class ImageBrowserApp:
                 if len(parts) >= 2:
                     shortcuts[func_name] = {
                         "key": parts[0],
-                        "name": parts[1] if len(parts) > 2 else func_name,
-                        "menu": parts[2] if len(parts) > 3 else "General"
+                        "name": parts[1] if len(parts) > 1 else func_name,
+                        "menu": parts[2] if len(parts) > 2 else "General"
                     }
         return shortcuts
 
-
+    # Read in the theme from the ini file
     def get_colors(self):
+        # Set default colours in case nothing is specified in the ini file
         default_colors = {
             "background": "#1e1e1e",
             "foreground": "#e0e0e0",
