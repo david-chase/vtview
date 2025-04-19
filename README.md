@@ -13,8 +13,9 @@ Alt-C   Copy files
 Alt-D   Delete tag from file(s)
 Alt-I   Copy current file as an index
 Alt-M   Move file(s)
+Alt-O   Toss file(s) into a folder
 Alt-R   Scrub tags in file(s)
-Alt-T   Toss file(s) into a folder
+Alt-T   Get tags from index file
 Alt-F4  Exit
 Del     Delete file(s)
 Enter   View fullscreen / launch external program

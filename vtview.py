@@ -9,27 +9,135 @@ import re
 import webbrowser
 
 def scrub_filename(filename: str) -> str:
+    import string
+
+    # Step 1: Parse root and tags section
+    if " #" not in filename:
+        return filename  # No tag section present
+
     base, ext = os.path.splitext(filename)
-    match = re.search(r"(.*?)(\s*)(#.+)", base)
-    if not match:
-        return filename
-    root_part = match.group(1).rstrip()
-    tag_part = match.group(3)
-    hashtags = [tag.lower() for tag in re.findall(r"#\w+", tag_part)]
+    root_split = base.split(" #", 1)
+    root = root_split[0]
+    tag_section = root_split[1]
+
+    # Step 2: Clean up the tags section
+    # Remove all whitespace and punctuation (except #)
+    tag_section = ''.join(c for c in tag_section if c not in string.whitespace + string.punctuation or c == '#')
+
+    # Step 3: Parse individual tags
+    tags = []
+    current_tag = ''
+    in_tag = False
+    for c in tag_section:
+        if c == '#':
+            if in_tag and current_tag:
+                tags.append(f"#{current_tag}")
+            current_tag = ''
+            in_tag = True
+        elif in_tag:
+            current_tag += c
+
+    if in_tag and current_tag:
+        tags.append(f"#{current_tag}")
+
+    # Step 4: Deduplicate and handle priority tag
     priority_tags = {"#1", "#2", "#3", "#4", "#5"}
-    last_priority_tag = None
-    other_tags = []
-    for tag in hashtags:
-        if tag in priority_tags:
-            last_priority_tag = tag
-        else:
-            other_tags.append(tag)
-    unique_other_tags = sorted(set(other_tags))
-    all_tags = ([last_priority_tag] if last_priority_tag else []) + unique_other_tags
-    new_tag_string = "".join(all_tags)
-    return f"{root_part} {new_tag_string}{ext}"
+    last_priority = None
+    filtered_tags = []
+    seen = set()
+
+    for tag in reversed(tags):
+        if tag in priority_tags and not last_priority:
+            last_priority = tag
+        elif tag not in priority_tags and tag not in seen:
+            seen.add(tag)
+            filtered_tags.append(tag)
+
+    if last_priority:
+        filtered_tags.append(last_priority)
+
+    # Step 5: Sort tags alphabetically
+    filtered_tags = sorted(filtered_tags, key=lambda t: (t not in priority_tags, t))
+
+    # Step 6: Reassemble filename
+    tag_str = ''.join(filtered_tags)
+    return f"{root} {tag_str}{ext}" if tag_str else f"{root}{ext}"
+
 
 class ImageBrowserApp:
+    def tag_from_index_file(self, event=None):
+        selection = self.listbox.curselection()
+        if not selection:
+            return
+
+        model_base_dir = self.config.get("Settings", "ModelBaseDir", fallback=None)
+        if not model_base_dir or not os.path.isdir(model_base_dir):
+            return
+
+        filenames = [self.listbox.get(i) for i in selection]
+        dialog, label, progress = self.show_status_dialog("Applying Tags from Index", filenames)
+
+        for i, filename in enumerate(filenames):
+            label.config(text=filename)
+            dialog.update_idletasks()
+
+            base, ext = os.path.splitext(filename)
+
+            # Parse model name and rest of filename
+            model_split = base.split("-", 1)
+            if len(model_split) < 2:
+                continue  # No '-' means no model name
+
+            model_name = model_split[0]
+            if " " in model_name:
+                continue  # Invalid model name
+
+            rest_of_name = model_split[1]
+            existing_tag_block_match = re.search(r"(#.+)$", rest_of_name)
+            existing_tags = existing_tag_block_match.group(1) if existing_tag_block_match else ""
+            root_name = rest_of_name.replace(existing_tags, "").strip()
+
+            # Look for index file: "<modelname>-index <tags>.jpg"
+            index_prefix = f"{model_name}-index "
+            index_tags = None
+
+            for f in os.listdir(model_base_dir):
+                if not f.lower().endswith(".jpg"):
+                    continue
+
+                tag_match = re.fullmatch(
+                    rf"{re.escape(model_name)}-index\s+((?:#[1-5]|#[a-zA-Z]+)+)\.jpg", f, re.IGNORECASE
+                )
+
+                if tag_match:
+                    index_tags = tag_match.group(1)
+                    break
+
+            if not index_tags:
+                continue  # No index file found
+
+            # Combine: model-root <index tags> <existing tags>
+            new_base = f"{model_name}-{root_name} {index_tags} {existing_tags}".strip()
+            
+            # Scrub the filename
+            new_filename = scrub_filename(f"{new_base}{ext}")
+
+            if new_filename == filename:
+                continue
+
+            src = os.path.join(self.current_folder, filename)
+            dst = os.path.join(self.current_folder, new_filename)
+
+            try:
+                os.rename(src, dst)
+            except Exception as e:
+                messagebox.showerror("Rename Failed", f"Could not rename {filename}:\n{e}")
+
+            progress["value"] = i + 1
+
+        dialog.destroy()
+        self.load_images()
+
     def change_to_favorite_folder(self, event=None):
         selected = self.fav_folder_var.get()
         if selected and os.path.isdir(selected):
@@ -527,6 +635,9 @@ class ImageBrowserApp:
             arrowcolor=self.colors["foreground"]
         )
 
+        # For debugging
+        self.root.bind_all("<Key>", lambda e: print(f"KEY: {e.keysym}, state={e.state}"))
+
         # Bind keys
         keymap = {
             "delete_file": self.prompt_delete_selected_files,
@@ -540,26 +651,28 @@ class ImageBrowserApp:
             "add_tag": self.add_custom_tag,
             "make_index": self.make_index_file,
             "remove_tag": self.remove_custom_tag,
+            "tag_from_index": self.tag_from_index_file,
             "open_help": self.open_help_url
         }
 
         for keyname, handler in keymap.items():
-            raw_key = self.shortcut_keys.get(keyname)
-            if raw_key:
-                binding = self.normalize_binding(raw_key)
+            shortcut = self.shortcut_keys.get(keyname)
+            if shortcut:
+                binding = self.normalize_binding(shortcut["key"])
 
-                # Return 'break' to suppress default widget behavior
                 def wrapped_handler(event, h=handler):
                     h()
                     return "break"
 
-                self.listbox.bind(binding, wrapped_handler)
-                self.search_entry.bind(binding, wrapped_handler)
+                self.root.bind_all(binding, wrapped_handler)
 
+        # Map the Alt-1 to Alt-5 keys
         for i in range(1, 6):
-            raw_key = self.shortcut_keys.get(f"alt_tag_{i}", f"Alt-{i}")
-            binding = self.normalize_binding(raw_key)
+            shortcut = self.shortcut_keys.get(f"alt_tag_{i}")
+            key_string = shortcut["key"] if isinstance(shortcut, dict) else shortcut or f"Alt-{i}"
+            binding = self.normalize_binding(key_string)
             self.root.bind_all(binding, partial(self._tag_shortcut_handler, i))
+
 
         # Set the focus on file list and select first item on app load
         if self.listbox.size() > 0:
@@ -702,11 +815,13 @@ class ImageBrowserApp:
             self.load_images()
 
 
+    # Read in the inifile
     def load_config(self):
         config = configparser.ConfigParser()
         config.read(self.config_path)
         return config
 
+    # Read in the list of supproted file types, including ones defined as being for videos
     def get_supported_extensions(self):
         extensions = self.config.get("Settings", "extensions", fallback=".jpg,.jpeg,.gif,.webp,.png")
         video_extensions = self.config.get("Sections", "videoextensions", fallback=".mp4,.avi,.webm").lower()
@@ -714,9 +829,20 @@ class ImageBrowserApp:
         self.video_extensions = tuple(e.strip().lower() for e in video_extensions.split(",") if e.strip())
         return tuple(e.strip().lower() for e in extensions.split(",") if e.strip())
 
-
+    # Read shortcuts and kep mappings from the ini file
     def get_shortcuts(self):
-        return dict(self.config.items("Shortcuts")) if self.config.has_section("Shortcuts") else {}
+        shortcuts = {}
+        if self.config.has_section("Shortcuts"):
+            for func_name, line in self.config.items("Shortcuts"):
+                parts = [p.strip() for p in line.split(",", 3)]
+                if len(parts) >= 2:
+                    shortcuts[func_name] = {
+                        "key": parts[0],
+                        "name": parts[1] if len(parts) > 2 else func_name,
+                        "menu": parts[2] if len(parts) > 3 else "General"
+                    }
+        return shortcuts
+
 
     def get_colors(self):
         default_colors = {
