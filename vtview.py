@@ -30,6 +30,25 @@ def scrub_filename(filename: str) -> str:
     return f"{root_part} {new_tag_string}{ext}"
 
 class ImageBrowserApp:
+    def change_to_favorite_folder(self, event=None):
+        selected = self.fav_folder_var.get()
+        if selected and os.path.isdir(selected):
+            self.current_folder = selected
+            self.root.title(f"VtView - {self.current_folder}")
+            self.load_images()
+
+    def toggle_sort_direction(self):
+        self.sort_ascending = not self.sort_ascending
+        self.load_images()
+
+    def set_sort_ascending(self):
+        self.sort_ascending = True
+        self.load_images()
+
+    def set_sort_descending(self):
+        self.sort_ascending = False
+        self.load_images()
+        
     def sort_key_factory(self, method):
         def sort_key(filename):
             path = os.path.join(self.current_folder, filename)
@@ -400,8 +419,8 @@ class ImageBrowserApp:
 
         self.select_button = tk.Button(
             folder_sort_frame,
-            text="Select",
-            width=6,
+            text="Select folder",
+            width=12,
             bg=self.colors["button_background"],
             fg=self.colors["button_foreground"],
             activebackground=self.colors["highlight"],
@@ -425,8 +444,37 @@ class ImageBrowserApp:
             width=10
         )
         self.sort_dropdown.pack(side=tk.LEFT)
-        self.sort_dropdown.bind("<<ComboboxSelected>>", lambda e: self.load_images())
 
+        self.sort_ascending = True  # default sort direction
+
+        self.sort_toggle_button = tk.Button(
+            folder_sort_frame,
+            text="↑/↓",
+            width=3,
+            command=self.toggle_sort_direction
+        )
+        self.sort_toggle_button.pack(side=tk.LEFT, padx=2)
+
+        tk.Label(
+            folder_sort_frame,
+            text="Favourites:",
+            bg=self.colors["background"],
+            fg=self.colors["foreground"]
+        ).pack(side=tk.LEFT, padx=(10, 2))
+
+        self.fav_folders = [f.strip() for f in self.config.get("Settings", "FavouriteFolders", fallback="").split(",") if f.strip()]
+        self.fav_folder_var = tk.StringVar()
+        self.fav_folder_dropdown = ttk.Combobox(
+            folder_sort_frame,
+            textvariable=self.fav_folder_var,
+            values=self.fav_folders,
+            state="readonly",
+            width=20
+        )
+        self.fav_folder_dropdown.pack(side=tk.LEFT, padx=(10, 0))
+        self.fav_folder_dropdown.bind("<<ComboboxSelected>>", self.change_to_favorite_folder)
+
+        self.sort_dropdown.bind("<<ComboboxSelected>>", lambda e: self.load_images())
 
         listbox_frame = tk.Frame(self.left_frame, bg=self.colors["foreground"], bd=1, relief="solid")
         listbox_frame.pack(fill=tk.BOTH, expand=True, padx=(0,0), pady=(10,5))
@@ -455,7 +503,6 @@ class ImageBrowserApp:
 
         self.listbox.bind("<Motion>", self.on_listbox_motion)
         self.listbox.bind("<Leave>", self.hide_tooltip)
-
 
         self.right_frame = tk.Frame(self.paned, bg=self.colors["background"])
         self.paned.add(self.right_frame)
@@ -520,7 +567,6 @@ class ImageBrowserApp:
             self.listbox.activate(0)
             self.listbox.event_generate("<<ListboxSelect>>")
         self.listbox.focus_set()
-
 
     def normalize_binding(self, key_str):
         key_str = key_str.strip()
@@ -725,7 +771,8 @@ class ImageBrowserApp:
             sort_method = self.sort_var.get() if hasattr(self, 'sort_var') else "Name"
             file_list = [f for f in os.listdir(self.current_folder) if f.lower().endswith(self.supported_formats)]
             sort_key = self.sort_key_factory(sort_method)
-            self.all_files = sorted(file_list, key=sort_key)
+            self.all_files = sorted(file_list, key=sort_key, reverse=not getattr(self, 'sort_ascending', True))
+
 
         except Exception as e:
             self.canvas.delete("all")
