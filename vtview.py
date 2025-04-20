@@ -8,6 +8,7 @@ import configparser
 import re
 import webbrowser
 import stat
+import time
 
 def scrub_filename(filename: str) -> str:
     import string
@@ -596,19 +597,32 @@ class ImageBrowserApp:
         # Read in whether we want to render folders in the file list
         self.show_folders = self.config.get("Settings", "ShowFolders", fallback="false").lower() == "true"
 
+        # Read in whether DebugMode = true
+        self.debug_mode = self.config.get("Settings", "DebugMode", fallback="false").lower() == "true"
+
+        # Read in the theme data
         self.colors = self.get_colors()
 
+        # Read in the list of "image" types 
         self.supported_formats = self.get_supported_extensions()
+
+        # Keyboard bindings (which also inform menu bar)
         self.shortcut_keys = self.get_shortcuts()
+
+        # Default folder
         self.default_folder = self.config.get("Settings", "default_folder", fallback=os.getcwd())
 
+        # Current folder
         self.current_folder = self.default_folder
+        
+        # Set the window title
         self.root.title(f"VtView - {self.current_folder}")
         self.root.configure(bg=self.colors["background"])
 
         # Launch the menu bar
         self.build_menu_bar()
 
+        # The search bar
         self.search_var = tk.StringVar()
         self.search_var.trace_add('write', self.update_file_list)
 
@@ -765,7 +779,7 @@ class ImageBrowserApp:
         )
 
         # For debugging
-        self.root.bind_all("<Key>", lambda e: print(f"KEY: {e.keysym}, state={e.state}"))
+        # self.root.bind_all("<Key>", lambda e: print(f"KEY: {e.keysym}, state={e.state}"))
 
         # Bind keys
         keymap = {
@@ -1016,6 +1030,9 @@ class ImageBrowserApp:
     # Loads all supported files and (optionally) folders from the current folder,
     # applies the selected sort method, and updates the file list display.
     def load_images(self):
+        # If DebugMode = true start a timer
+        self._load_timer_start = time.perf_counter()
+        
         try:
             sort_method = self.sort_var.get() if hasattr(self, 'sort_var') else "Name"
             ascending = getattr(self, 'sort_ascending', True)
@@ -1139,6 +1156,13 @@ class ImageBrowserApp:
                 text="No matching files.",
                 fill="white", font=("Arial", 14)
             )
+
+        # If DebugMode = true display the timer
+        if self.debug_mode and hasattr(self, "_load_timer_start"):
+            elapsed = time.perf_counter() - self._load_timer_start
+            del self._load_timer_start
+            print(f"[DEBUG] Loaded folder {self.current_folder} in {elapsed:.3f} seconds.")
+
 
     def refresh_folder(self, event=None):
         self.load_images()
@@ -1335,7 +1359,7 @@ class ImageBrowserApp:
     def show_fullscreen_image(self, event=None):
         selection = self.listbox.curselection()
         if len(selection) != 1:
-            return  # Do nothing unless exactly one item is selected
+            return
 
         filename = self.listbox.get(selection[0])
         full_path = os.path.join(self.current_folder, filename)
@@ -1347,13 +1371,41 @@ class ImageBrowserApp:
             return
 
         try:
-            Image.open(full_path).verify()
-            self.fullscreen_index = selection[0]
-            self.fullscreen_images = self.listbox.get(0, tk.END)
-            self.open_fullscreen_window()
+            img = Image.open(full_path)
         except Exception:
+            # Not a valid image — launch with default program
+            os.startfile(full_path)
             return
 
+        try:
+            screen_width = self.root.winfo_screenwidth()
+            screen_height = self.root.winfo_screenheight()
+            img_ratio = img.width / img.height
+            screen_ratio = screen_width / screen_height
+            if img_ratio > screen_ratio:
+                new_width = screen_width
+                new_height = int(new_width / img_ratio)
+            else:
+                new_height = screen_height
+                new_width = int(new_height * img_ratio)
+            img = img.resize((new_width, new_height), Image.LANCZOS)
+            fullscreen_img = ImageTk.PhotoImage(img)
+            if self.fullscreen_window and self.fullscreen_window.winfo_exists():
+                self.fullscreen_window.destroy()
+            self.fullscreen_window = tk.Toplevel(self.root)
+            self.fullscreen_window.attributes("-fullscreen", True)
+            self.fullscreen_window.configure(bg="black")
+            self.fullscreen_window.focus_set()
+            self.fullscreen_window.bind("<Escape>", lambda e: self.fullscreen_window.destroy())
+            self.fullscreen_window.bind("<Left>", self.fullscreen_previous_image)
+            self.fullscreen_window.bind("<Right>", self.fullscreen_next_image)
+            label = tk.Label(self.fullscreen_window, image=fullscreen_img, bg="black")
+            label.image = fullscreen_img
+            label.pack(expand=True)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not display fullscreen image:\n\n{e}")
+
+    # We're displaying an image.  Switch to fullscreen mode.
     def open_fullscreen_window(self):
         try:
             image_name = self.fullscreen_images[self.fullscreen_index]
@@ -1390,7 +1442,7 @@ class ImageBrowserApp:
         except Exception as e:
             messagebox.showerror("Error", f"Could not display fullscreen image:\n\n{e}")
 
-
+# Main program loop
 if __name__ == "__main__":
     root = tk.Tk()
     root.state('zoomed')
