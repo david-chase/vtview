@@ -585,9 +585,40 @@ class ImageBrowserApp:
             self.listbox.focus_set()
             self.listbox.event_generate("<<ListboxSelect>>")
 
-    def _tag_shortcut_handler(self, tag_value, event=None):
-        self.tag_file_with_priority(str(tag_value))
+    # Handle the Alt-1 to Alt-5 keys
+    def _tag_shortcut_handler(self, tag_number, event=None):
+        tag = f"#{tag_number}"
+        selected_indices = self.listbox.curselection()
+        updated_filenames = []
 
+        for index in selected_indices:
+            filename = self.listbox.get(index)
+            full_path = os.path.join(self.current_folder, filename)
+            if os.path.isdir(full_path):
+                continue
+
+            new_name = self.tag_file_with_priority(tag, filename)
+            if new_name:
+                updated_filenames.append(new_name)
+
+        if updated_filenames:
+            self.load_images()
+            filenames = self.listbox.get(0, tk.END)
+            self.listbox.selection_clear(0, tk.END)
+            for fname in updated_filenames:
+                try:
+                    idx = filenames.index(fname)
+                    self.listbox.selection_set(idx)
+                    self.listbox.activate(idx)
+                    self.listbox.see(idx)
+                except ValueError:
+                    continue
+            self.listbox.focus_set()
+            self.listbox.event_generate("<<ListboxSelect>>")
+
+    #---------------------------------------------------------
+    #  Our main init section
+    #---------------------------------------------------------
     def __init__(self, root):
         self.root = root
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -726,12 +757,25 @@ class ImageBrowserApp:
 
         self.sort_dropdown.bind("<<ComboboxSelected>>", lambda e: self.load_images())
 
+        # Create the file list box
         listbox_frame = tk.Frame(self.left_frame, bg=self.colors["foreground"], bd=1, relief="solid")
-        listbox_frame.pack(fill=tk.BOTH, expand=True, padx=(0,0), pady=(10,5))
+        listbox_frame.pack(fill=tk.BOTH, expand=True, padx=(0,0), pady=(10,0))
 
+        # Add the scrollbar to the file list box
         scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # Fancy up the scrollbar
+        style = ttk.Style()
+        style.theme_use("clam")  # looks good in dark mode
+        style.configure("Vertical.TScrollbar",
+            background=self.colors["button_background"],
+            troughcolor=self.colors["background"],
+            bordercolor=self.colors["background"],
+            arrowcolor=self.colors["foreground"]
+        )
+
+        # Set properties and style for file list box
         self.listbox = tk.Listbox(
             listbox_frame,
             selectmode=tk.EXTENDED,
@@ -743,40 +787,45 @@ class ImageBrowserApp:
             yscrollcommand=scrollbar.set,
             activestyle="none"
         )
+
+        # More file list box junk
         self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.listbox.yview)
-
         self.listbox.bind("<<ListboxSelect>>", self.show_selected_image)
+        self.listbox.bind("<Motion>", self.on_listbox_motion)
+        self.listbox.bind("<Leave>", self.hide_tooltip)
 
+        # Status message at bottom
+        self.status_label = tk.Label(
+            self.left_frame,
+            text="",
+            anchor="w",
+            bg=self.colors["background"],
+            fg=self.colors["foreground"],
+            font=("Arial", 9)
+        )
+        self.status_label.pack(fill=tk.X, padx=0, pady=(2, 5))
+
+        # Tooltips if I hover over a filename
         self.tooltip_window = None
         self.tooltip_after_id = None
         self.tooltip_index = None
 
-        self.listbox.bind("<Motion>", self.on_listbox_motion)
-        self.listbox.bind("<Leave>", self.hide_tooltip)
-
+        # This is the "canvas" right pane
         self.right_frame = tk.Frame(self.paned, bg=self.colors["background"])
         self.paned.add(self.right_frame)
 
         self.canvas = tk.Canvas(self.right_frame, bg=self.colors["canvas_background"], highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True, padx=(0,0), pady=(10,5))
 
+        # Load the list of images
+        self.load_images()
+        self.canvas.bind("<Configure>", self.on_canvas_resize)
+
         self.current_image = None
         self.current_image_path = None
         self.fullscreen_window = None
         self.all_files = []
-
-        self.load_images()
-        self.canvas.bind("<Configure>", self.on_canvas_resize)
-
-        style = ttk.Style()
-        style.theme_use("clam")  # looks good in dark mode
-        style.configure("Vertical.TScrollbar",
-            background=self.colors["button_background"],
-            troughcolor=self.colors["background"],
-            bordercolor=self.colors["background"],
-            arrowcolor=self.colors["foreground"]
-        )
 
         # For debugging
         # self.root.bind_all("<Key>", lambda e: print(f"KEY: {e.keysym}, state={e.state}"))
@@ -845,56 +894,28 @@ class ImageBrowserApp:
         normalized = special_keys.get(key_str.lower(), key_str)
         return f"<{normalized}>"
 
-    def tag_file_with_priority(self, tag_value):
-        # Pull the escape hatch if this is a folder
-        file_path = os.path.join(self.current_folder, filename)
-        if os.path.isdir(file_path):
+    # Add a rating tag to one or more images
+    def tag_file_with_priority(self, tag_value, filename):
+        base, ext = os.path.splitext(filename)
+        modified_filename = f"{base} #{tag_value}{ext}"
+        cleaned_filename = scrub_filename(modified_filename)
+
+        if cleaned_filename == filename:
             return
 
-        selection = self.listbox.curselection()
-        if not selection:
+        old_path = os.path.join(self.current_folder, filename)
+        new_path = os.path.join(self.current_folder, cleaned_filename)
+
+        if os.path.exists(new_path):
+            messagebox.showerror("Rename Failed", f"{cleaned_filename} already exists.")
             return
 
-        updated_filenames = []
-
-        for i in selection:
-            original_filename = self.listbox.get(i)
-            base, ext = os.path.splitext(original_filename)
-            modified_filename = f"{base} #{tag_value}{ext}"
-            cleaned_filename = scrub_filename(modified_filename)
-
-            if cleaned_filename == original_filename:
-                continue
-
-            old_path = os.path.join(self.current_folder, original_filename)
-            new_path = os.path.join(self.current_folder, cleaned_filename)
-
-            if os.path.exists(new_path):
-                messagebox.showerror("Rename Failed", f"{cleaned_filename} already exists.")
-                continue
-
-            try:
-                os.rename(old_path, new_path)
-                updated_filenames.append(cleaned_filename)
-            except Exception as e:
-                messagebox.showerror("Rename Failed", f"Failed to apply tag #{tag_value} to {original_filename}:\n{e}")
-
-        if updated_filenames:
-            self.load_images()
-            filenames = self.listbox.get(0, tk.END)
-
-            self.listbox.selection_clear(0, tk.END)
-            for fname in updated_filenames:
-                try:
-                    idx = filenames.index(fname)
-                    self.listbox.selection_set(idx)
-                    self.listbox.activate(idx)
-                    self.listbox.see(idx)
-                except ValueError:
-                    continue
-
-            self.listbox.focus_set()
-            self.listbox.event_generate("<<ListboxSelect>>")
+        try:
+            os.rename(old_path, new_path)
+            return cleaned_filename
+        except Exception as e:
+            messagebox.showerror("Rename Failed", f"Failed to apply tag #{tag_value} to {filename}:\n{e}")
+            return None
 
     def toss_to_model_folder(self, event=None):
         selection = self.listbox.curselection()
@@ -961,7 +982,6 @@ class ImageBrowserApp:
 
         if moved_files:
             self.load_images()
-
 
     # Read in the inifile
     def load_config(self):
@@ -1030,42 +1050,54 @@ class ImageBrowserApp:
     # Loads all supported files and (optionally) folders from the current folder,
     # applies the selected sort method, and updates the file list display.
     def load_images(self):
+        # Start timer if debugging
+        if self.debug_mode:
+            self._load_timer_start = time.perf_counter()
+
+        # Show "Loading..." in the status bar immediately
+        self.status_label.config(text="Loading...")
+        self.root.update_idletasks()
+        
         try:
             sort_method = self.sort_var.get() if hasattr(self, 'sort_var') else "Name"
             ascending = getattr(self, 'sort_ascending', True)
 
             all_entries = []
+            filenames = os.listdir(self.current_folder)
 
-            with os.scandir(self.current_folder) as entries:
-                for entry in entries:
-                    name = entry.name
-                    full_path = entry.path
+            # Phase 1: Collect files
+            for name in filenames:
+                full_path = os.path.join(self.current_folder, name)
 
-                    if entry.is_dir(follow_symlinks=False):
-                        if not self.show_folders:
-                            continue
-                        if name.startswith('.') or self.is_hidden_or_system(full_path):
-                            continue
-                        all_entries.append({
-                            "name": name,
-                            "is_folder": True,
-                            "size": 0,
-                            "created": 0,
-                            "modified": 0
-                        })
+                if os.path.isfile(full_path) and name.lower().endswith(self.supported_formats):
+                    all_entries.append({
+                        "name": name,
+                        "is_folder": False,
+                        "size": 0,
+                        "created": 0,
+                        "modified": 0
+                    })
 
-                    elif entry.is_file(follow_symlinks=False):
-                        if name.startswith('.') or self.is_hidden_or_system(full_path):
-                            continue
-                        all_entries.append({
-                            "name": name,
-                            "is_folder": False,
-                            "size": 0,
-                            "created": 0,
-                            "modified": 0
-                        })
+            # Phase 2: Collect folders (if enabled)
+            if self.show_folders:
+                for name in filenames:
+                    full_path = os.path.join(self.current_folder, name)
 
-            # Only stat files/folders if sort requires it
+                    if not os.path.isdir(full_path):
+                        continue
+
+                    if name.startswith('.') or self.is_hidden_or_system(full_path):
+                        continue
+
+                    all_entries.append({
+                        "name": name,
+                        "is_folder": True,
+                        "size": 0,
+                        "created": 0,
+                        "modified": 0
+                    })
+
+            # Phase 3: If sorting by anything other than name, fetch extra metadata
             if sort_method in {"Size", "Created", "Modified"}:
                 for entry in all_entries:
                     full_path = os.path.join(self.current_folder, entry["name"])
@@ -1074,7 +1106,7 @@ class ImageBrowserApp:
                         entry["created"] = os.path.getctime(full_path)
                         entry["modified"] = os.path.getmtime(full_path)
                     except Exception:
-                        continue  # Ignore files that can't be accessed
+                        continue  # skip bad entries
 
             def sort_key(entry):
                 if sort_method == "Size":
@@ -1104,7 +1136,6 @@ class ImageBrowserApp:
             return
 
         self.update_file_list()
-
 
     # Updates the Listbox to show files and (optionally) folders matching the current search.
     # Applies alternating background colors and foreground colors based on file type.
@@ -1155,8 +1186,9 @@ class ImageBrowserApp:
         if self.debug_mode and hasattr(self, "_load_timer_start"):
             elapsed = time.perf_counter() - self._load_timer_start
             del self._load_timer_start
-            print(f"[DEBUG] Loaded folder {self.current_folder} in {elapsed:.3f} seconds.")
-
+            self.status_label.config(text=f"Loaded folder {self.current_folder} in {elapsed:.3f} seconds.")
+        else:
+            self.status_label.config(text="")
 
     def refresh_folder(self, event=None):
         self.load_images()
@@ -1368,6 +1400,8 @@ class ImageBrowserApp:
             img = Image.open(full_path)
         except Exception:
             # Not a valid image — launch with default program
+            self.status_label.config(text=f"Launching {filename}...")
+            self.root.update_idletasks()
             os.startfile(full_path)
             return
 
