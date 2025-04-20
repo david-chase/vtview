@@ -1030,49 +1030,42 @@ class ImageBrowserApp:
     # Loads all supported files and (optionally) folders from the current folder,
     # applies the selected sort method, and updates the file list display.
     def load_images(self):
-        # If DebugMode = true start a timer
-        self._load_timer_start = time.perf_counter()
-        
         try:
             sort_method = self.sort_var.get() if hasattr(self, 'sort_var') else "Name"
             ascending = getattr(self, 'sort_ascending', True)
 
             all_entries = []
-            filenames = os.listdir(self.current_folder)
 
-            # Phase 1: Collect files
-            for name in filenames:
-                full_path = os.path.join(self.current_folder, name)
+            with os.scandir(self.current_folder) as entries:
+                for entry in entries:
+                    name = entry.name
+                    full_path = entry.path
 
-                if os.path.isfile(full_path) and name.lower().endswith(self.supported_formats):
-                    all_entries.append({
-                        "name": name,
-                        "is_folder": False,
-                        "size": 0,
-                        "created": 0,
-                        "modified": 0
-                    })
+                    if entry.is_dir(follow_symlinks=False):
+                        if not self.show_folders:
+                            continue
+                        if name.startswith('.') or self.is_hidden_or_system(full_path):
+                            continue
+                        all_entries.append({
+                            "name": name,
+                            "is_folder": True,
+                            "size": 0,
+                            "created": 0,
+                            "modified": 0
+                        })
 
-            # Phase 2: Collect folders (if enabled)
-            if self.show_folders:
-                for name in filenames:
-                    full_path = os.path.join(self.current_folder, name)
+                    elif entry.is_file(follow_symlinks=False):
+                        if name.startswith('.') or self.is_hidden_or_system(full_path):
+                            continue
+                        all_entries.append({
+                            "name": name,
+                            "is_folder": False,
+                            "size": 0,
+                            "created": 0,
+                            "modified": 0
+                        })
 
-                    if not os.path.isdir(full_path):
-                        continue
-
-                    if name.startswith('.') or self.is_hidden_or_system(full_path):
-                        continue
-
-                    all_entries.append({
-                        "name": name,
-                        "is_folder": True,
-                        "size": 0,
-                        "created": 0,
-                        "modified": 0
-                    })
-
-            # Phase 3: If sorting by anything other than name, fetch extra metadata
+            # Only stat files/folders if sort requires it
             if sort_method in {"Size", "Created", "Modified"}:
                 for entry in all_entries:
                     full_path = os.path.join(self.current_folder, entry["name"])
@@ -1081,7 +1074,7 @@ class ImageBrowserApp:
                         entry["created"] = os.path.getctime(full_path)
                         entry["modified"] = os.path.getmtime(full_path)
                     except Exception:
-                        continue  # skip bad entries
+                        continue  # Ignore files that can't be accessed
 
             def sort_key(entry):
                 if sort_method == "Size":
@@ -1111,6 +1104,7 @@ class ImageBrowserApp:
             return
 
         self.update_file_list()
+
 
     # Updates the Listbox to show files and (optionally) folders matching the current search.
     # Applies alternating background colors and foreground colors based on file type.
