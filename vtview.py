@@ -7,6 +7,7 @@ from functools import partial
 import configparser
 import re
 import webbrowser
+import stat
 
 def scrub_filename(filename: str) -> str:
     import string
@@ -64,6 +65,26 @@ def scrub_filename(filename: str) -> str:
     return f"{root} {tag_str}{ext}" if tag_str else f"{root}{ext}"
 
 class ImageBrowserApp:
+    # Called when you press the move up a folder ".." button
+    def go_up_one_folder(self):
+        parent = os.path.dirname(self.current_folder)
+        if parent and os.path.isdir(parent) and parent != self.current_folder:
+            self.current_folder = parent
+            self.root.title(f"VtView - {self.current_folder}")
+            self.load_images()
+
+    # Helps detect folders that are hidden or system so we can ignore them
+    def is_hidden_or_system(self, path):
+        try:
+            if os.name == 'nt':
+                attrs = os.stat(path).st_file_attributes
+                return bool(attrs & (stat.FILE_ATTRIBUTE_HIDDEN | stat.FILE_ATTRIBUTE_SYSTEM))
+            else:
+                return os.path.basename(path).startswith('.')
+        except AttributeError:
+            # st_file_attributes may not exist on some systems
+            return os.path.basename(path).startswith('.')
+
     # Build the menu bar dynamically from the shortcuts in our ini file
     def build_menu_bar(self):
         import tkinter as tk
@@ -130,6 +151,11 @@ class ImageBrowserApp:
 
     # Look in the models folder to see if there's a model index file.  If yes, inherit the tags from it.    
     def tag_from_index_file(self, event=None):
+        # Pull the escape hatch if this is a folder
+        file_path = os.path.join(self.current_folder, filename)
+        if os.path.isdir(file_path):
+            return        
+    
         selection = self.listbox.curselection()
         if not selection:
             return
@@ -396,6 +422,11 @@ class ImageBrowserApp:
         return dialog, label, progress
     
     def make_index_file(self, event=None):
+        # Pull the escape hatch if this is a folder
+        file_path = os.path.join(self.current_folder, filename)
+        if os.path.isdir(file_path):
+            return
+
         selection = self.listbox.curselection()
         if not selection:
             return
@@ -434,6 +465,11 @@ class ImageBrowserApp:
             self.load_images()
 
     def remove_custom_tag(self, event=None):
+        # Pull the escape hatch if this is a folder
+        file_path = os.path.join(self.current_folder, filename)
+        if os.path.isdir(file_path):
+            return
+
         selection = self.listbox.curselection()
         if not selection:
             return
@@ -491,6 +527,10 @@ class ImageBrowserApp:
 
 
     def add_custom_tag(self, event=None):
+        # Pull the escape hatch if this is a folder
+        file_path = os.path.join(self.current_folder, filename)
+        if os.path.isdir(file_path):
+            return
         selection = self.listbox.curselection()
         if not selection:
             return
@@ -553,6 +593,9 @@ class ImageBrowserApp:
         self.config_path = os.path.join(self.script_dir, "vtview.ini")
         self.config = self.load_config()
 
+        # Read in whether we want to render folders in the file list
+        self.show_folders = self.config.get("Settings", "ShowFolders", fallback="false").lower() == "true"
+
         self.colors = self.get_colors()
 
         self.supported_formats = self.get_supported_extensions()
@@ -592,6 +635,7 @@ class ImageBrowserApp:
         folder_sort_frame = tk.Frame(self.left_frame, bg=self.colors["background"])
         folder_sort_frame.pack(padx=10, pady=(5, 0), fill=tk.X)
 
+        # Select folder button
         self.select_button = tk.Button(
             folder_sort_frame,
             text="Select folder",
@@ -603,6 +647,19 @@ class ImageBrowserApp:
         )
         self.select_button.pack(side=tk.LEFT)
 
+        # Move up a folder button ".."
+        self.up_button = tk.Button(
+            folder_sort_frame,
+            text="..",
+            width=3,
+            bg=self.colors["button_background"],
+            fg=self.colors["button_foreground"],
+            activebackground=self.colors["highlight"],
+            command=self.go_up_one_folder
+        )
+        self.up_button.pack(side=tk.LEFT, padx=(5, 5))
+
+        # Sort by label
         tk.Label(
             folder_sort_frame,
             text="Sort by:",
@@ -610,6 +667,7 @@ class ImageBrowserApp:
             fg=self.colors["foreground"]
         ).pack(side=tk.LEFT, padx=(10, 2))
 
+        # Sort by drop-down
         self.sort_var = tk.StringVar(value="Name")
         self.sort_dropdown = ttk.Combobox(
             folder_sort_frame,
@@ -622,6 +680,7 @@ class ImageBrowserApp:
 
         self.sort_ascending = True  # default sort direction
 
+        # Sort order toggle button
         self.sort_toggle_button = tk.Button(
             folder_sort_frame,
             text="↑/↓",
@@ -630,6 +689,7 @@ class ImageBrowserApp:
         )
         self.sort_toggle_button.pack(side=tk.LEFT, padx=2)
 
+        # Favourites label
         tk.Label(
             folder_sort_frame,
             text="Favourites:",
@@ -637,6 +697,7 @@ class ImageBrowserApp:
             fg=self.colors["foreground"]
         ).pack(side=tk.LEFT, padx=(10, 2))
 
+        # Favourites drop-down
         self.fav_folders = [f.strip() for f in self.config.get("Settings", "FavouriteFolders", fallback="").split(",") if f.strip()]
         self.fav_folder_var = tk.StringVar()
         self.fav_folder_dropdown = ttk.Combobox(
@@ -665,7 +726,8 @@ class ImageBrowserApp:
             selectbackground=self.colors["highlight"],
             highlightthickness=0,
             relief=tk.FLAT,
-            yscrollcommand=scrollbar.set
+            yscrollcommand=scrollbar.set,
+            activestyle="none"
         )
         self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.listbox.yview)
@@ -770,6 +832,11 @@ class ImageBrowserApp:
         return f"<{normalized}>"
 
     def tag_file_with_priority(self, tag_value):
+        # Pull the escape hatch if this is a folder
+        file_path = os.path.join(self.current_folder, filename)
+        if os.path.isdir(file_path):
+            return
+
         selection = self.listbox.curselection()
         if not selection:
             return
@@ -924,6 +991,7 @@ class ImageBrowserApp:
             "list_background": "#1e1e1e",
             "list_background_alt": "#252525",
             "canvas_background": "#1e1e1e",
+            "folder_foreground": "#007700",
             "invalid_foreground": "#888888"
         }
         if self.config.has_section("Colors"):
@@ -934,6 +1002,7 @@ class ImageBrowserApp:
             default_colors["list_background"] = self.config.get("Colors", "list_background", fallback=default_colors["background"])
             default_colors["canvas_background"] = self.config.get("Colors", "canvas_background", fallback=default_colors["background"])        
             default_colors["invalid_foreground"] = self.config.get("Colors", "invalid_foreground", fallback=default_colors["invalid_foreground"])
+            default_colors["folder_foreground"] = self.config.get("Colors", "folder_foreground", fallback=default_colors["folder_foreground"])
             
         return default_colors
 
@@ -944,29 +1013,76 @@ class ImageBrowserApp:
             self.root.title(f"VtView - {self.current_folder}")
             self.load_images()
 
+    # Loads all supported files and (optionally) folders from the current folder,
+    # applies the selected sort method, and updates the file list display.
     def load_images(self):
         try:
-            def sort_key_factory(self, method):
-                def sort_key(filename):
-                    path = os.path.join(self.current_folder, filename)
-                    try:
-                        if method == "Size":
-                            return os.path.getsize(path)
-                        elif method == "Created":
-                            return os.path.getctime(path)
-                        elif method == "Modified":
-                            return os.path.getmtime(path)
-                        else:
-                            return filename.lower()
-                    except:
-                        return 0
-                return sort_key
-
             sort_method = self.sort_var.get() if hasattr(self, 'sort_var') else "Name"
-            file_list = [f for f in os.listdir(self.current_folder) if f.lower().endswith(self.supported_formats)]
-            sort_key = self.sort_key_factory(sort_method)
-            self.all_files = sorted(file_list, key=sort_key, reverse=not getattr(self, 'sort_ascending', True))
+            ascending = getattr(self, 'sort_ascending', True)
 
+            all_entries = []
+            filenames = os.listdir(self.current_folder)
+
+            # Phase 1: Collect files
+            for name in filenames:
+                full_path = os.path.join(self.current_folder, name)
+
+                if os.path.isfile(full_path) and name.lower().endswith(self.supported_formats):
+                    all_entries.append({
+                        "name": name,
+                        "is_folder": False,
+                        "size": 0,
+                        "created": 0,
+                        "modified": 0
+                    })
+
+            # Phase 2: Collect folders (if enabled)
+            if self.show_folders:
+                for name in filenames:
+                    full_path = os.path.join(self.current_folder, name)
+
+                    if not os.path.isdir(full_path):
+                        continue
+
+                    if name.startswith('.') or self.is_hidden_or_system(full_path):
+                        continue
+
+                    all_entries.append({
+                        "name": name,
+                        "is_folder": True,
+                        "size": 0,
+                        "created": 0,
+                        "modified": 0
+                    })
+
+            # Phase 3: If sorting by anything other than name, fetch extra metadata
+            if sort_method in {"Size", "Created", "Modified"}:
+                for entry in all_entries:
+                    full_path = os.path.join(self.current_folder, entry["name"])
+                    try:
+                        entry["size"] = os.path.getsize(full_path)
+                        entry["created"] = os.path.getctime(full_path)
+                        entry["modified"] = os.path.getmtime(full_path)
+                    except Exception:
+                        continue  # skip bad entries
+
+            def sort_key(entry):
+                if sort_method == "Size":
+                    return entry["size"]
+                elif sort_method == "Created":
+                    return entry["created"]
+                elif sort_method == "Modified":
+                    return entry["modified"]
+                else:
+                    return entry["name"].lower()
+
+            sorted_entries = sorted(
+                all_entries,
+                key=lambda e: (0 if e["is_folder"] else 1, sort_key(e)),
+                reverse=not ascending
+            )
+
+            self.all_files = [entry["name"] for entry in sorted_entries]
 
         except Exception as e:
             self.canvas.delete("all")
@@ -976,8 +1092,11 @@ class ImageBrowserApp:
                 fill="white", font=("Arial", 14)
             )
             return
+
         self.update_file_list()
 
+    # Updates the Listbox to show files and (optionally) folders matching the current search.
+    # Applies alternating background colors and foreground colors based on file type.
     def update_file_list(self, *args):
         self.listbox.delete(0, tk.END)
         self.current_image_path = None
@@ -995,14 +1114,20 @@ class ImageBrowserApp:
             self.listbox.insert(tk.END, file)
             bg = self.colors["list_background"] if index % 2 == 0 else self.colors["list_background_alt"]
 
+            # Check if this is an image or a folder
             file_path = os.path.join(self.current_folder, file)
-            is_image = True
-            file_ext = os.path.splitext(file)[1].lower()
-            is_image = file_ext in self.supported_formats
+            is_folder = os.path.isdir(file_path)
+            file_path = os.path.join(self.current_folder, file)
+            is_folder = os.path.isdir(file_path)
 
-            fg = self.colors["foreground"] if is_image else self.colors["invalid_foreground"]
+            # Folders appear in a different colour
+            if is_folder:
+                fg = self.colors["folder_foreground"]
+            else:
+                fg = self.colors["foreground"]
+
+
             self.listbox.itemconfig(index, {'bg': bg, 'fg': fg})
-
 
         if matching_files:
             self.listbox.selection_set(0)
@@ -1159,6 +1284,12 @@ class ImageBrowserApp:
         dialog.destroy()
 
     def rewrite_file_names(self, event=None):
+        # Pull the escape hatch if this is a folder
+        file_path = os.path.join(self.current_folder, filename)
+        if os.path.isdir(file_path):
+            return
+
+
         selection = self.listbox.curselection()
         if not selection:
             return
@@ -1200,13 +1331,28 @@ class ImageBrowserApp:
         except Exception as e:
             messagebox.showerror("Rename Failed", f"Unable to rename file:\n{e}")
 
+    # User pressed Enter.  If it's an image display it.  If it's not, launch its program.  If it's a folder enter it.
     def show_fullscreen_image(self, event=None):
         selection = self.listbox.curselection()
-        if not selection:
+        if len(selection) != 1:
+            return  # Do nothing unless exactly one item is selected
+
+        filename = self.listbox.get(selection[0])
+        full_path = os.path.join(self.current_folder, filename)
+
+        if os.path.isdir(full_path):
+            self.current_folder = full_path
+            self.root.title(f"VtView - {self.current_folder}")
+            self.load_images()
             return
-        self.fullscreen_index = selection[0]
-        self.fullscreen_images = self.listbox.get(0, tk.END)
-        self.open_fullscreen_window()
+
+        try:
+            Image.open(full_path).verify()
+            self.fullscreen_index = selection[0]
+            self.fullscreen_images = self.listbox.get(0, tk.END)
+            self.open_fullscreen_window()
+        except Exception:
+            return
 
     def open_fullscreen_window(self):
         try:
