@@ -9,6 +9,7 @@ import re
 import webbrowser
 import stat
 import time
+import csv
 
 def scrub_filename(filename: str) -> str:
     import string
@@ -66,6 +67,38 @@ def scrub_filename(filename: str) -> str:
     return f"{root} {tag_str}{ext}" if tag_str else f"{root}{ext}"
 
 class ImageBrowserApp:
+    # For one or more files, check if there is a model specified in the filename that
+    # corresponds to a model name in the database.  If yes, merge in the tags from
+    # the database into the filename, then scrub it.
+    def pull_tags_from_database(self, event=None):
+
+        
+        return
+
+    # Read in the Models CSV
+    def load_models_database(self):
+        models = []
+        try:
+            datafiles_dir = os.path.expandvars("%DataFiles%")
+            csv_path = os.path.join(datafiles_dir, "models.csv")
+            if not os.path.exists(csv_path):
+                if self.debug_mode:
+                    print(f"Models database not found: {csv_path}")
+                return models
+
+            with open(csv_path, newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if all(k in row for k in ("name", "tags", "url")):
+                        models.append({
+                            "name": row["name"].strip(),
+                            "tags": row["tags"].strip(),
+                            "url": row["url"].strip()
+                        })
+        except Exception as e:
+            messagebox.showerror("Models DB Load Error", f"Failed to load models.csv:\n{e}")
+        return models
+
     # Called when you press the move up a folder ".." button
     def go_up_one_folder(self):
         parent = os.path.dirname(self.current_folder)
@@ -123,7 +156,6 @@ class ImageBrowserApp:
             "add_tag": self.add_custom_tag,
             "make_index": self.make_index_file,
             "remove_tag": self.remove_custom_tag,
-            "tag_from_index": self.tag_from_index_file,
             "open_help": self.open_help_url
         }
         for i in range(1, 6):
@@ -150,85 +182,7 @@ class ImageBrowserApp:
 
         self.root.config(menu=menubar)
 
-    # Look in the models folder to see if there's a model index file.  If yes, inherit the tags from it.    
-    def tag_from_index_file(self, event=None):
-        # Pull the escape hatch if this is a folder
-        file_path = os.path.join(self.current_folder, filename)
-        if os.path.isdir(file_path):
-            return        
-    
-        selection = self.listbox.curselection()
-        if not selection:
-            return
-
-        model_base_dir = self.config.get("Settings", "ModelBaseDir", fallback=None)
-        if not model_base_dir or not os.path.isdir(model_base_dir):
-            return
-
-        filenames = [self.listbox.get(i) for i in selection]
-        dialog, label, progress = self.show_status_dialog("Applying Tags from Index", filenames)
-
-        for i, filename in enumerate(filenames):
-            label.config(text=filename)
-            dialog.update_idletasks()
-
-            base, ext = os.path.splitext(filename)
-
-            # Parse model name and rest of filename
-            model_split = base.split("-", 1)
-            if len(model_split) < 2:
-                continue  # No '-' means no model name
-
-            model_name = model_split[0]
-            if " " in model_name:
-                continue  # Invalid model name
-
-            rest_of_name = model_split[1]
-            existing_tag_block_match = re.search(r"(#.+)$", rest_of_name)
-            existing_tags = existing_tag_block_match.group(1) if existing_tag_block_match else ""
-            root_name = rest_of_name.replace(existing_tags, "").strip()
-
-            # Look for index file: "<modelname>-index <tags>.jpg"
-            index_prefix = f"{model_name}-index "
-            index_tags = None
-
-            for f in os.listdir(model_base_dir):
-                if not f.lower().endswith(".jpg"):
-                    continue
-
-                tag_match = re.fullmatch(
-                    rf"{re.escape(model_name)}-index\s+((?:#[1-5]|#[a-zA-Z]+)+)\.jpg", f, re.IGNORECASE
-                )
-
-                if tag_match:
-                    index_tags = tag_match.group(1)
-                    break
-
-            if not index_tags:
-                continue  # No index file found
-
-            # Combine: model-root <index tags> <existing tags>
-            new_base = f"{model_name}-{root_name} {index_tags} {existing_tags}".strip()
-            
-            # Scrub the filename
-            new_filename = scrub_filename(f"{new_base}{ext}")
-
-            if new_filename == filename:
-                continue
-
-            src = os.path.join(self.current_folder, filename)
-            dst = os.path.join(self.current_folder, new_filename)
-
-            try:
-                os.rename(src, dst)
-            except Exception as e:
-                messagebox.showerror("Rename Failed", f"Could not rename {filename}:\n{e}")
-
-            progress["value"] = i + 1
-
-        dialog.destroy()
-        self.load_images()
-
+    # I've selected a folder from the favourites drop-down.  Switch to it.
     def change_to_favorite_folder(self, event=None):
         selected = self.fav_folder_var.get()
         if selected and os.path.isdir(selected):
@@ -236,18 +190,22 @@ class ImageBrowserApp:
             self.root.title(f"VtView - {self.current_folder}")
             self.load_images()
 
+    # I've clicked the toggle to change sort order
     def toggle_sort_direction(self):
         self.sort_ascending = not self.sort_ascending
         self.load_images()
 
+    # I'm sorting ascending
     def set_sort_ascending(self):
         self.sort_ascending = True
         self.load_images()
 
+    # I'm sorting descending
     def set_sort_descending(self):
         self.sort_ascending = False
         self.load_images()
-        
+
+    # I want to sort by something other than filename
     def sort_key_factory(self, method):
         def sort_key(filename):
             path = os.path.join(self.current_folder, filename)
@@ -264,6 +222,7 @@ class ImageBrowserApp:
                 return 0
         return sort_key
 
+    # If I hover over a file in the file list for over a second
     def on_listbox_motion(self, event):
         index = self.listbox.nearest(event.y)
 
@@ -277,6 +236,7 @@ class ImageBrowserApp:
         # Schedule new tooltip
         self.tooltip_after_id = self.root.after(1000, lambda: self.show_tooltip(event, index))
 
+    # Show a tooltip with the full filename
     def show_tooltip(self, event, index):
         if self.tooltip_window:
             return  # Already showing
@@ -423,10 +383,6 @@ class ImageBrowserApp:
         return dialog, label, progress
     
     def make_index_file(self, event=None):
-        # Pull the escape hatch if this is a folder
-        file_path = os.path.join(self.current_folder, filename)
-        if os.path.isdir(file_path):
-            return
 
         selection = self.listbox.curselection()
         if not selection:
@@ -434,6 +390,12 @@ class ImageBrowserApp:
 
         for i in selection:
             filename = self.listbox.get(i)
+
+            # Pull the escape hatch if this is a folder
+            file_path = os.path.join(self.current_folder, filename)
+            if os.path.isdir(file_path):
+                return
+            
             base, ext = os.path.splitext(filename)
 
             # Check if "-" exists
@@ -466,10 +428,6 @@ class ImageBrowserApp:
             self.load_images()
 
     def remove_custom_tag(self, event=None):
-        # Pull the escape hatch if this is a folder
-        file_path = os.path.join(self.current_folder, filename)
-        if os.path.isdir(file_path):
-            return
 
         selection = self.listbox.curselection()
         if not selection:
@@ -488,6 +446,11 @@ class ImageBrowserApp:
         dialog, label, progress = self.show_status_dialog("Removing Tag", filenames)
 
         for i, filename in enumerate(filenames):
+            # Pull the escape hatch if this is a folder
+            file_path = os.path.join(self.current_folder, filename)
+            if os.path.isdir(file_path):
+                return
+        
             label.config(text=filename)
             dialog.update_idletasks()
 
@@ -528,18 +491,19 @@ class ImageBrowserApp:
 
 
     def add_custom_tag(self, event=None):
-        # Pull the escape hatch if this is a folder
-        file_path = os.path.join(self.current_folder, filename)
-        if os.path.isdir(file_path):
-            return
+        # Debugging
+        # messagebox.showinfo("Debug", "Break")
+
         selection = self.listbox.curselection()
         if not selection:
             return
 
+        # Prompt for the tag to add
         tag = self.ask_tag_with_autocomplete()
         if not tag:
             return
 
+        # If the tag doesn't have a # on it, add one
         tag = tag.strip()
         if not tag.startswith("#"):
             tag = f"#{tag}"
@@ -548,12 +512,18 @@ class ImageBrowserApp:
         updated_filenames = []
         dialog, label, progress = self.show_status_dialog("Adding Tag", filenames)
 
+        # This loop does all the processing
         for i, filename in enumerate(filenames):
+            # Pull the escape hatch if this is a folder
+            file_path = os.path.join(self.current_folder, filename)
+            if os.path.isdir(file_path):
+                continue
+
             label.config(text=filename)
             dialog.update_idletasks()
 
             base, ext = os.path.splitext(filename)
-            new_filename = scrub_filename(f"{base} {tag}{ext}")
+            new_filename = scrub_filename(f"{base}{tag}{ext}")
             if new_filename == filename:
                 continue
 
@@ -646,6 +616,9 @@ class ImageBrowserApp:
         # Current folder
         self.current_folder = self.default_folder
         
+        # Load the models database from %DataFiles%\models.csv
+        self.models_db = self.load_models_database()
+
         # Set the window title
         self.root.title(f"VtView - {self.current_folder}")
         self.root.configure(bg=self.colors["background"])
@@ -827,9 +800,6 @@ class ImageBrowserApp:
         self.fullscreen_window = None
         self.all_files = []
 
-        # For debugging
-        # self.root.bind_all("<Key>", lambda e: print(f"KEY: {e.keysym}, state={e.state}"))
-
         # Bind keys
         keymap = {
             "delete_file": self.prompt_delete_selected_files,
@@ -843,8 +813,8 @@ class ImageBrowserApp:
             "add_tag": self.add_custom_tag,
             "make_index": self.make_index_file,
             "remove_tag": self.remove_custom_tag,
-            "tag_from_index": self.tag_from_index_file,
-            "open_help": self.open_help_url
+            "open_help": self.open_help_url,
+            "tag_from_db": self.pull_tags_from_database
         }
 
         for keyname, handler in keymap.items():
@@ -1334,17 +1304,17 @@ class ImageBrowserApp:
         dialog.destroy()
 
     def rewrite_file_names(self, event=None):
-        # Pull the escape hatch if this is a folder
-        file_path = os.path.join(self.current_folder, filename)
-        if os.path.isdir(file_path):
-            return
-
 
         selection = self.listbox.curselection()
         if not selection:
             return
 
         for i in selection:
+            # Pull the escape hatch if this is a folder
+            file_path = os.path.join(self.current_folder, self.listbox.get(i))
+            if os.path.isdir(file_path):
+                return
+                    
             original_filename = self.listbox.get(i)
             new_filename = scrub_filename(original_filename)
 
